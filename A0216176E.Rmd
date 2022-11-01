@@ -1,0 +1,120 @@
+---
+title: "A0216176E DSA4211 Project"
+author: "Phua Anson"
+date: "2022-10-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ISLR2)
+library(glmnet)
+library(leaps)
+library(pls)
+library(tidyverse)
+library(boot)
+```
+
+
+
+```{r project code chunk}
+set.seed(5)
+
+# We remove X52 attribute from the tables due to significant number of NA instances 
+# The removal applies to both training and testing datasets 
+
+no_of_na_in_x52 = length(which(is.na(read.csv("../data/train-xy.csv", header = TRUE, sep = ",")[,53]))) #193 
+
+train_xy <- read.csv("../data/train-xy.csv", header = TRUE, sep = ",")[,-53]
+test_x <- read.csv("../data/test-x.csv" ,header = TRUE, sep = ",")[,-52]
+
+# Similar to our tutorial approach, we split train_xy into training and validation (test) sets 
+sampling = sample.int(2,nrow(train_xy),replace=TRUE)
+# alternative split 70 % train, 30% test, commented out below: 
+#alt_s_train = sample(1:nrow(train_xy),0.8*nrow(train_xy),replace=FALSE)
+
+# split into train and test based on sampling method 
+train = train_xy[sampling==1,] 
+test = train_xy[sampling==2,]
+
+
+# We will now analyse which methods give the least MSE and thus decide the best model for prediction of response values 
+
+
+#Lasso Regression Method 
+lasso.cv = cv.glmnet(model.matrix(Y~.,train)[,-1],train$Y,alpha=1,nfolds = 10)
+lasso.pred = predict(lasso.cv,newx=model.matrix(Y~.,test)[,-1],s="lambda.min",type="response")
+lasso.mse = mean((lasso.pred-test$Y)^2) #24.8614 when nfolds= 10 and 25.13278 when nfolds = 5 
+lasso_selected_variables = row.names(coef(lasso.cv))[as.matrix(coef(lasso.cv)!=0)]
+
+
+
+#Ridge Regression Method 
+ridge.cv = cv.glmnet(model.matrix(Y~.,train)[,-1],train$Y,alpha=0, nfolds = 10)
+ridge.pred = predict(ridge.cv,newx=model.matrix(Y~.,test)[,-1],s="lambda.min",type="response")
+ridge.mse = mean((ridge.pred-test$Y)^2) #40.69052
+ridge_selected_variables = row.names(coef(ridge.cv))[as.matrix(coef(ridge.cv)!=0)]
+
+# use boot library to check Ridge  
+# ridge.boot.fit = glm(Y~.,data=train_xy,alpha = 0)
+# ridge.cv.err = cv.glm(train_xy,ridge.boot.fit,K=10)
+# ridge.cv.err$delta[1] #45.1184 
+
+
+
+#best subset selection
+#forward stepwise 
+regfit.fwd = regsubsets(Y~.,train,method="forward",nvmax=15)
+k <- which.min(summary(regfit.fwd)$bic) # selected number of variables in this case 8 
+
+plot(1:15,summary(regfit.fwd)$bic,xlab = "No.of predictors", ylab="BIC", main = "Forward Stepwise Selection" )
+points(k,summary(regfit.fwd)$bic[8],pch=18,col="darkorange",cex=1.5)
+
+
+predict.regsubsets <- function(object, newdata, id, ...)
+{
+form <- as.formula(object$call[[2]])
+mat <- model.matrix(form, newdata)
+coefi <- coef(object, id = id)
+xvars <- names(coefi)
+mat[, xvars] %*% coefi
+}
+
+regfit.fwd.pred = predict(regfit.fwd,test,k)
+fwd_step_mse = mean((regfit.fwd.pred-test$Y)^2) #29.91227
+
+
+#backward stepwise 
+regfit.bwd = regsubsets(Y~.,train,method="backward",nvmax = 15)
+k <- which.min(summary(regfit.bwd)$bic)
+plot(1:15,summary(regfit.bwd)$bic,xlab = "No.of predictors", ylab="BIC", main = "Backward Stepwise Selection" )
+points(k,summary(regfit.bwd)$bic[7],pch=18,col="darkorange",cex=1.5)
+regfit.bwd.pred = predict(regfit.bwd,test,k)
+bwd_step_mse = mean((regfit.bwd.pred-test$Y)^2) #38.85134
+
+
+#pcr 
+pcr.fit = pcr(Y~.,data=train,scale=T,validation='CV')
+validationplot(pcr.fit, val.type='MSEP',main="Principal Component Analysis")
+pls.MSEP = MSEP(pcr.fit,estimate = "CV")
+min_comp = which.min(pls.MSEP$val)
+min_comp #53 
+points(min_comp,min(pls.MSEP$val),pch=20,col="red",cex=1.5)
+pcr.pred = predict(pcr.fit,test,ncomp=53) 
+pcr_mse = mean((pcr.pred-test$Y)^2) #39.80535
+
+
+
+# We conclude that from the analysis that lasso is the best since it consistently gives the least MSE amongst other methods. Note that the seed is set to 5 for reproducibility purposes and demonstration of my findings. 
+
+
+final_model.pred = predict(lasso.cv,as.matrix(test_x),s="lambda.min",type="response")
+
+final_model.df = data.frame(final_model.pred)
+colnames(final_model.df) <- c('Y') #rename as Y 
+write.csv(final_model.df,"../data/A0216176E.csv", row.names = FALSE)
+
+
+ 
+```
+
